@@ -19,7 +19,7 @@ from tqdm.asyncio import tqdm
 
 
 class URLResolver:
-    def __init__(self, max_requests_per_second: int = 5):
+    def __init__(self, max_requests_per_second: int = 15):
         self.max_requests_per_second = max_requests_per_second
         self.request_times = []
         self.client = None
@@ -27,7 +27,7 @@ class URLResolver:
     async def __aenter__(self):
         self.client = httpx.AsyncClient(
             follow_redirects=True,
-            timeout=30.0,
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
             headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
         )
         return self
@@ -49,7 +49,7 @@ class URLResolver:
         
         self.request_times.append(now)
     
-    async def resolve_url(self, ph_url: str, max_retries: int = 3) -> Optional[str]:
+    async def resolve_url(self, ph_url: str, max_retries: int = 2) -> Optional[str]:
         """Resolve ProductHunt shortened URL to final destination."""
         full_url = f"https://producthunt.com{ph_url}"
         
@@ -77,10 +77,17 @@ class URLResolver:
                         return final_url
                     
             except Exception as e:
+                error_str = str(e)
+                # Fast fail for DNS errors - don't retry
+                if any(dns_error in error_str.lower() for dns_error in 
+                       ['name resolution', 'name or service not known', 'nodename nor servname']):
+                    print(f"DNS error for {ph_url}: {e}")
+                    return None
+                    
                 if attempt == max_retries - 1:
                     print(f"Error resolving {ph_url}: {e}")
                     return None
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)  # Shorter retry delay
         
         print(f"Failed to resolve URL after {max_retries} attempts: {ph_url}")
         return None
@@ -233,7 +240,7 @@ async def process_posts(
 @click.command()
 @click.option('--input', '-i', default='posts.ndjson', help='Input NDJSON file')
 @click.option('--output', '-o', default='posts.csv', help='Output CSV file')
-@click.option('--rate-limit', '-r', default=5, help='Max requests per second')
+@click.option('--rate-limit', '-r', default=15, help='Max requests per second')
 def main(input: str, output: str, rate_limit: int):
     """
     Convert ProductHunt posts NDJSON to polished CSV with URL resolution.
